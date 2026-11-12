@@ -13,9 +13,8 @@ Options:
 
 - keep the glibc 2.17 floor on the last 2014 images, copied to a registry we control (e.g. ghcr) so the
   pins cannot disappear;
-- raise the floor to glibc 2.28 (manylinux_2_28, AlmaLinux 8, GCC 14), which drops RHEL/CentOS 7,
-  Debian 8–9 and Ubuntu 14.04–18.04 — the README's "Raising the glibc floor" section covers the switch,
-  and the yum step would need checking on AlmaLinux.
+- retire the glibc 2.17 images and make the glibc 2.28 one (manylinux_2_28, AlmaLinux 8, GCC 14), already
+  published as `glibc2.28`, the default; this drops RHEL/CentOS 7, Debian 8–9 and Ubuntu 14.04–18.04.
 
 Unknown that settles it: whether those old targets are actually required by customers. The original
 commit in netxms-master (61fbba6655) chose 2.17 deliberately but recorded no reason; ask Victor.

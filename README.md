@@ -8,9 +8,10 @@ Container-based build of the two universal Linux agent variants:
   `src/agent/core/static_link.sh` and shipped gzip-compressed as
   `nxagentd-<version>-<suffix>-static.gz`
 
-The image is based on PyPA manylinux (CentOS 7 userland, glibc 2.17, GCC 10 from
-devtoolset), so the output runs on any distribution with glibc 2.17 or newer. All
-third-party libraries (OpenSSL, libcurl, libssh, PCRE2, zlib, expat) are built from
+The image is based on PyPA manylinux and comes in two glibc floors (see
+[glibc floors](#glibc-floors)); the default one (CentOS 7 userland, glibc 2.17, GCC 10
+from devtoolset) produces output that runs on any distribution with glibc 2.17 or newer.
+All third-party libraries (OpenSSL, libcurl, libssh, PCRE2, zlib, expat) are built from
 pinned sources as static archives inside the image, so shipped binaries take only
 glibc and the C++ runtime from the system.
 
@@ -28,7 +29,8 @@ docker run --rm --user $(id -u):$(id -g) \
 ```
 
 To build the image locally instead (e.g. after changing library versions in the
-Dockerfile), run `docker build -t netxms-agent-builder .` in this repository.
+Dockerfile), run `docker build -t netxms-agent-builder .` in this repository; add
+`--build-arg GLIBC=2.28` for the glibc 2.28 floor.
 
 The source tree is built in place, so use a clean checkout (or `make distclean` first).
 `build.sh` runs `build/prepare_release_build.sh` when `/src` is a git checkout and
@@ -64,19 +66,25 @@ Dockerfile selects the matching manylinux base image:
 docker build --platform linux/386 -t netxms-agent-builder:i686 .
 ```
 
-## Raising the glibc floor
+## glibc floors
 
-To switch to glibc 2.28 (AlmaLinux 8 userland, newer toolchain, drops RHEL 7 /
-Ubuntu 16.04 / Debian 9 targets):
+Each floor is published for all three architectures:
+
+| Floor | Tag | Base | Toolchain | Runs on |
+|---|---|---|---|---|
+| glibc 2.17 | `latest`, `glibc2.17` | manylinux2014 (CentOS 7) | GCC 10 | RHEL/CentOS 7+, Debian 8+, Ubuntu 14.04+, SLES 12+ |
+| glibc 2.28 | `glibc2.28` | manylinux_2_28 (AlmaLinux 8) | GCC 14 | RHEL 8+, Debian 10+, Ubuntu 20.04+, SLES 15 SP4+ |
+
+Use the glibc 2.28 image when the targets don't include the older distributions:
 
 ```sh
-docker build --platform linux/amd64 \
-   --build-arg BASE_IMAGE=quay.io/pypa/manylinux_2_28_x86_64 \
-   --build-arg GLIBC_MAX=2.28 --build-arg GLIBCXX_MAX=3.4.25 ...
+docker run --rm --user $(id -u):$(id -g) \
+   -v "$PWD:/src" -v "$PWD/out:/out" ghcr.io/netxms/linux-universal-agent-builder:glibc2.28
 ```
 
-`GLIBC_MAX` / `GLIBCXX_MAX` are the floors enforced by `check-elf.sh` on every
-produced ELF file; the build fails if a binary needs a newer symbol version or
+`GLIBC=2.17|2.28` selects the floor in the Dockerfile. Each floor sets
+`NXBUILD_GLIBC_MAX` / `NXBUILD_GLIBCXX_MAX` (2.17 / 3.4.19 and 2.28 / 3.4.25), which
+`check-elf.sh` enforces on every produced ELF file; the build fails if a binary needs a newer symbol version or
 depends on a shared library outside glibc, libstdc++/libgcc and the package itself.
 The static variant is checked with `--libc-only`.
 
@@ -90,14 +98,20 @@ Everything that goes into the image is pinned:
   in the Dockerfile;
 * GitHub Actions in `.github/workflows/image.yml` by commit SHA.
 
-The CentOS 7 packages installed with yum come from the frozen 7.9.2009 vault.
+The CentOS 7 packages installed with yum in the glibc 2.17 image come from the frozen
+7.9.2009 vault; the glibc 2.28 image installs them from the live AlmaLinux 8 repositories.
 To update a base image, take the new tag's digest from quay.io and change both
 the tag and the digest.
 
 ## Published images
 
-`.github/workflows/image.yml` builds each architecture on a native GitHub runner
-(`ubuntu-24.04` for x86_64 and i686, `ubuntu-24.04-arm` for aarch64), then
-combines them into one manifest list. Pushes to `master` publish `latest` and
-`sha-<commit>`; `v*` tags publish `<version>` and `<major>.<minor>`. Pull requests
-build all three architectures without pushing.
+`.github/workflows/image.yml` builds each architecture and glibc floor on a native
+GitHub runner (`ubuntu-24.04` for x86_64 and i686, `ubuntu-24.04-arm` for aarch64),
+then combines the architectures of each floor into one manifest list:
+
+| Trigger | glibc 2.17 | glibc 2.28 |
+|---|---|---|
+| push to `master` | `latest`, `glibc2.17`, `sha-<commit>` | `glibc2.28`, `sha-<commit>-glibc2.28` |
+| `v*` tag | `<version>`, `<major>.<minor>` | `<version>-glibc2.28`, `<major>.<minor>-glibc2.28` |
+
+Pull requests build all six images without pushing.

@@ -9,6 +9,8 @@
 #
 # Build:
 #   docker build -t netxms-agent-builder .
+# For the glibc 2.28 floor (manylinux_2_28, AlmaLinux 8 userland, GCC 14):
+#   docker build --build-arg GLIBC=2.28 -t netxms-agent-builder:glibc2.28 .
 # For aarch64 (native arm64 host, or qemu binfmt on x86_64):
 #   docker build --platform linux/arm64 -t netxms-agent-builder:aarch64 .
 # For 32-bit x86 (runs on any x86_64 host, no emulation needed):
@@ -18,23 +20,29 @@
 # personality (linux32) on the i686 image so uname and OpenSSL's target
 # detection see i686; on other images it is a plain exec.
 
-# Base image for each target platform, pinned by digest. BuildKit pulls only the
-# one selected by --platform. Pass --build-arg BASE_IMAGE=<image> to override.
+# Base image for each glibc floor and target platform, pinned by digest. BuildKit
+# pulls only the one selected by GLIBC and --platform.
 ARG TARGETARCH
-ARG BASE_IMAGE=base-${TARGETARCH}
+ARG GLIBC=2.17
 
-FROM --platform=linux/amd64 quay.io/pypa/manylinux2014_x86_64:2026.11.07-1@sha256:62eeff30ef134a85ec0f97109e008a319b0315ca5e8a6d754ee771556c02622a AS base-amd64
-FROM --platform=linux/386 quay.io/pypa/manylinux2014_i686:2026.11.07-1@sha256:1e7424bb933e3de581e12da0db9487631ebb637d686010d6a69f54c9d1606af2 AS base-386
-FROM --platform=linux/arm64 quay.io/pypa/manylinux2014_aarch64:2026.11.07-1@sha256:101d2292840109c9d329fcfcd7b89b46f59e19ca23cbfdcf059fb389994665fc AS base-arm64
+FROM --platform=linux/amd64 quay.io/pypa/manylinux2014_x86_64:2026.11.07-1@sha256:62eeff30ef134a85ec0f97109e008a319b0315ca5e8a6d754ee771556c02622a AS base-glibc2.17-amd64
+FROM --platform=linux/386 quay.io/pypa/manylinux2014_i686:2026.11.07-1@sha256:1e7424bb933e3de581e12da0db9487631ebb637d686010d6a69f54c9d1606af2 AS base-glibc2.17-386
+FROM --platform=linux/arm64 quay.io/pypa/manylinux2014_aarch64:2026.11.07-1@sha256:101d2292840109c9d329fcfcd7b89b46f59e19ca23cbfdcf059fb389994665fc AS base-glibc2.17-arm64
 
-FROM ${BASE_IMAGE}
+FROM --platform=linux/amd64 quay.io/pypa/manylinux_2_28_x86_64:2026.11.07-1@sha256:9555ba6c479fa69a2aa80ad1dc57154a60d562b19df159361d9379a02beb1e36 AS base-glibc2.28-amd64
+FROM --platform=linux/386 quay.io/pypa/manylinux_2_28_i686:2026.11.07-1@sha256:7a7fe196454a0e0b579d710760a754552e328cc3fc2713444419b0ab58e01c06 AS base-glibc2.28-386
+FROM --platform=linux/arm64 quay.io/pypa/manylinux_2_28_aarch64:2026.11.07-1@sha256:cb37f0d66c8a75abb93cf6085cad1f1427cd7208f0c0fc48359bb1eea9924f21 AS base-glibc2.28-arm64
 
-# Symbol version floor that check-elf.sh enforces on build output.
-# Must match BASE_IMAGE: manylinux2014 -> 2.17 / 3.4.19, manylinux_2_28 -> 2.28 / 3.4.25
-ARG GLIBC_MAX=2.17
-ARG GLIBCXX_MAX=3.4.19
-ENV NXBUILD_GLIBC_MAX=${GLIBC_MAX} \
-    NXBUILD_GLIBCXX_MAX=${GLIBCXX_MAX}
+# Symbol version floors that check-elf.sh enforces on build output
+FROM base-glibc2.17-${TARGETARCH} AS glibc2.17
+ENV NXBUILD_GLIBC_MAX=2.17 \
+    NXBUILD_GLIBCXX_MAX=3.4.19
+
+FROM base-glibc2.28-${TARGETARCH} AS glibc2.28
+ENV NXBUILD_GLIBC_MAX=2.28 \
+    NXBUILD_GLIBCXX_MAX=3.4.25
+
+FROM glibc${GLIBC}
 
 # Third-party library versions and SHA-256 of release tarballs
 ARG OPENSSL_VERSION=3.5.9
@@ -51,7 +59,8 @@ ARG LIBSSH_VERSION=0.12.2
 ARG LIBSSH_SHA256=49560f677d96e3706a904ac2de1116e25f3680937d51e5c92198fcba4a1c1e9f
 
 # yum is needed only for flex and two perl modules used by OpenSSL's Configure. CentOS 7
-# is EOL and vault.centos.org is unreliable, so use the kernel.org mirror of the vault.
+# (glibc 2.17 base) is EOL and vault.centos.org is unreliable, so use the kernel.org
+# mirror of the vault; the sed matches nothing on the AlmaLinux 8 (glibc 2.28) base.
 RUN sed -i -e 's#https\?://vault.centos.org/centos/\($releasever\|7\)/#https://archive.kernel.org/centos-vault/7.9.2009/#g' \
            -e 's#https\?://vault.centos.org/altarch/\($releasever\|7\)/#https://archive.kernel.org/centos-vault/altarch/7.9.2009/#g' \
            /etc/yum.repos.d/*.repo && \

@@ -29,6 +29,8 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
+        glibc: ['2.17', '2.28']
+        arch: [x86_64, i686, aarch64]
         include:
           - arch: x86_64
             platform: linux/amd64
@@ -58,10 +60,11 @@ jobs:
         id: build
         with:
           platforms: ${{ matrix.platform }}
+          build-args: GLIBC=${{ matrix.glibc }}
           labels: ${{ steps.meta.outputs.labels }}
           outputs: type=image,name=${{ env.IMAGE }},push-by-digest=true,name-canonical=true,push=${{ env.PUSH }}
-          cache-from: type=gha,scope=${{ matrix.arch }}
-          cache-to: type=gha,mode=max,scope=${{ matrix.arch }}
+          cache-from: type=gha,scope=glibc${{ matrix.glibc }}-${{ matrix.arch }}
+          cache-to: type=gha,mode=max,scope=glibc${{ matrix.glibc }}-${{ matrix.arch }}
 
       - name: Export digest
         if: env.PUSH == 'true'
@@ -74,7 +77,7 @@ jobs:
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: env.PUSH == 'true'
         with:
-          name: digests-${{ matrix.arch }}
+          name: digests-glibc${{ matrix.glibc }}-${{ matrix.arch }}
           path: ${{ runner.temp }}/digests/*
           if-no-files-found: error
           retention-days: 1
@@ -86,11 +89,19 @@ jobs:
     permissions:
       contents: read
       packages: write
+    strategy:
+      matrix:
+        include:
+          # glibc 2.17 is the default floor and keeps the unsuffixed tags
+          - glibc: '2.17'
+            suffix: ''
+          - glibc: '2.28'
+            suffix: '-glibc2.28'
     steps:
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           path: ${{ runner.temp }}/digests
-          pattern: digests-*
+          pattern: digests-glibc${{ matrix.glibc }}-*
           merge-multiple: true
 
       - uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550 # v4.8.0
@@ -107,10 +118,11 @@ jobs:
           images: ${{ env.IMAGE }}
           flavor: latest=false
           tags: |
-            type=raw,value=latest,enable={{is_default_branch}}
-            type=sha
-            type=semver,pattern={{version}}
-            type=semver,pattern={{major}}.{{minor}}
+            type=raw,value=latest,enable=${{ matrix.suffix == '' && github.ref_name == github.event.repository.default_branch }}
+            type=raw,value=glibc${{ matrix.glibc }},enable={{is_default_branch}}
+            type=sha,suffix=${{ matrix.suffix }}
+            type=semver,pattern={{version}},suffix=${{ matrix.suffix }}
+            type=semver,pattern={{major}}.{{minor}},suffix=${{ matrix.suffix }}
 
       - name: Create manifest list
         working-directory: ${{ runner.temp }}/digests
@@ -120,6 +132,4 @@ jobs:
             $(printf "$IMAGE@sha256:%s " *)
 
       - name: Inspect
-        env:
-          VERSION: ${{ steps.meta.outputs.version }}
-        run: docker buildx imagetools inspect "$IMAGE:$VERSION"
+        run: docker buildx imagetools inspect "$(jq -r '.tags[0]' <<< "$DOCKER_METADATA_OUTPUT_JSON")"
